@@ -5,12 +5,11 @@
 # SPDX-License-Identifier: GPL-3.0
 #
 # GNU Radio Python Flow Graph
-# Title: pkt_rcv
-# Author: Barry Duggan
+# Title: Receive
+# Author: Bima Pancara
 # Description: packet receive
-# GNU Radio version: 3.10.6.0
+# GNU Radio version: 3.10.9.2
 
-from packaging.version import Version as StrictVersion
 from PyQt5 import Qt
 from gnuradio import qtgui
 from gnuradio import analog
@@ -26,7 +25,8 @@ from PyQt5 import Qt
 from argparse import ArgumentParser
 from gnuradio.eng_arg import eng_float, intx
 from gnuradio import eng_notation
-from gnuradio import zeromq
+import osmosdr
+import time
 import sip
 
 
@@ -34,9 +34,9 @@ import sip
 class pkt_rcv(gr.top_block, Qt.QWidget):
 
     def __init__(self):
-        gr.top_block.__init__(self, "pkt_rcv", catch_exceptions=True)
+        gr.top_block.__init__(self, "Receive", catch_exceptions=True)
         Qt.QWidget.__init__(self)
-        self.setWindowTitle("pkt_rcv")
+        self.setWindowTitle("Receive")
         qtgui.util.check_set_qss()
         try:
             self.setWindowIcon(Qt.QIcon.fromTheme('gnuradio-grc'))
@@ -57,30 +57,29 @@ class pkt_rcv(gr.top_block, Qt.QWidget):
         self.settings = Qt.QSettings("GNU Radio", "pkt_rcv")
 
         try:
-            if StrictVersion(Qt.qVersion()) < StrictVersion("5.0.0"):
-                self.restoreGeometry(self.settings.value("geometry").toByteArray())
-            else:
-                self.restoreGeometry(self.settings.value("geometry"))
+            geometry = self.settings.value("geometry")
+            if geometry:
+                self.restoreGeometry(geometry)
         except BaseException as exc:
             print(f"Qt GUI: Could not restore geometry: {str(exc)}", file=sys.stderr)
 
         ##################################################
         # Variables
         ##################################################
-        self.usrp_rate = usrp_rate = 768000
+        self.usrp_rate = usrp_rate = 2e6
         self.thresh = thresh = 1
         self.sps = sps = 4
         self.samp_rate = samp_rate = 48000
         self.phase_bw = phase_bw = 0.0628
         self.excess_bw = excess_bw = 0.35
         self.bpsk = bpsk = digital.constellation_bpsk().base()
+        self.bpsk.set_npwr(1.0)
         self.MTU = MTU = 1500
 
         ##################################################
         # Blocks
         ##################################################
 
-        self.zeromq_sub_source_0 = zeromq.sub_source(gr.sizeof_gr_complex, 1, 'tcp://127.0.0.1:49201', 100, False, (-1), '', False)
         self.rational_resampler_xxx_0 = filter.rational_resampler_ccc(
                 interpolation=1,
                 decimation=((int)(usrp_rate/samp_rate)),
@@ -281,6 +280,21 @@ class pkt_rcv(gr.top_block, Qt.QWidget):
             self.top_grid_layout.setRowStretch(r, 1)
         for c in range(2, 4):
             self.top_grid_layout.setColumnStretch(c, 1)
+        self.osmosdr_source_0 = osmosdr.source(
+            args="numchan=" + str(1) + " " + "hackRf=0"
+        )
+        self.osmosdr_source_0.set_time_now(osmosdr.time_spec_t(time.time()), osmosdr.ALL_MBOARDS)
+        self.osmosdr_source_0.set_sample_rate(usrp_rate)
+        self.osmosdr_source_0.set_center_freq(1e9, 0)
+        self.osmosdr_source_0.set_freq_corr(0, 0)
+        self.osmosdr_source_0.set_dc_offset_mode(0, 0)
+        self.osmosdr_source_0.set_iq_balance_mode(0, 0)
+        self.osmosdr_source_0.set_gain_mode(False, 0)
+        self.osmosdr_source_0.set_gain(10, 0)
+        self.osmosdr_source_0.set_if_gain(20, 0)
+        self.osmosdr_source_0.set_bb_gain(20, 0)
+        self.osmosdr_source_0.set_antenna('', 0)
+        self.osmosdr_source_0.set_bandwidth(500e6, 0)
         self.digital_symbol_sync_xx_0 = digital.symbol_sync_cc(
             digital.TED_MUELLER_AND_MULLER,
             sps,
@@ -305,10 +319,9 @@ class pkt_rcv(gr.top_block, Qt.QWidget):
         self.blocks_uchar_to_float_0_0 = blocks.uchar_to_float()
         self.blocks_throttle2_0 = blocks.throttle( gr.sizeof_gr_complex*1, samp_rate, True, 0 if "auto" == "auto" else max( int(float(0.1) * samp_rate) if "auto" == "time" else int(0.1), 1) )
         self.blocks_repack_bits_bb_1_0 = blocks.repack_bits_bb(1, 8, "packet_len", False, gr.GR_MSB_FIRST)
-        self.blocks_file_sink_0 = blocks.file_sink(gr.sizeof_char*1, './output.tmp', False)
+        self.blocks_file_sink_0 = blocks.file_sink(gr.sizeof_char*1, './Rx.tmp', False)
         self.blocks_file_sink_0.set_unbuffered(True)
-        self.analog_agc_xx_0 = analog.agc_cc((1e-4), 1.0, 1.0)
-        self.analog_agc_xx_0.set_max_gain(2.0)
+        self.analog_agc_xx_0 = analog.agc_cc((1e-4), 1.0, 1.0, 2.0)
 
 
         ##################################################
@@ -331,8 +344,8 @@ class pkt_rcv(gr.top_block, Qt.QWidget):
         self.connect((self.digital_map_bb_0, 0), (self.blocks_uchar_to_float_0_0, 0))
         self.connect((self.digital_map_bb_0, 0), (self.digital_correlate_access_code_xx_ts_0, 0))
         self.connect((self.digital_symbol_sync_xx_0, 0), (self.digital_costas_loop_cc_0, 0))
+        self.connect((self.osmosdr_source_0, 0), (self.rational_resampler_xxx_0, 0))
         self.connect((self.rational_resampler_xxx_0, 0), (self.blocks_throttle2_0, 0))
-        self.connect((self.zeromq_sub_source_0, 0), (self.rational_resampler_xxx_0, 0))
 
 
     def closeEvent(self, event):
@@ -348,6 +361,7 @@ class pkt_rcv(gr.top_block, Qt.QWidget):
 
     def set_usrp_rate(self, usrp_rate):
         self.usrp_rate = usrp_rate
+        self.osmosdr_source_0.set_sample_rate(self.usrp_rate)
 
     def get_thresh(self):
         return self.thresh
@@ -360,6 +374,7 @@ class pkt_rcv(gr.top_block, Qt.QWidget):
 
     def set_sps(self, sps):
         self.sps = sps
+        self.digital_symbol_sync_xx_0.set_sps(self.sps)
 
     def get_samp_rate(self):
         return self.samp_rate
@@ -391,6 +406,7 @@ class pkt_rcv(gr.top_block, Qt.QWidget):
 
     def set_bpsk(self, bpsk):
         self.bpsk = bpsk
+        self.digital_constellation_decoder_cb_0.set_constellation(self.bpsk)
 
     def get_MTU(self):
         return self.MTU
@@ -403,9 +419,6 @@ class pkt_rcv(gr.top_block, Qt.QWidget):
 
 def main(top_block_cls=pkt_rcv, options=None):
 
-    if StrictVersion("4.5.0") <= StrictVersion(Qt.qVersion()) < StrictVersion("5.0.0"):
-        style = gr.prefs().get_string('qtgui', 'style', 'raster')
-        Qt.QApplication.setGraphicsSystem(style)
     qapp = Qt.QApplication(sys.argv)
 
     tb = top_block_cls()
